@@ -7,7 +7,6 @@ from yt_dlp.extractor.common import InfoExtractor
 
 class HstreamIE(InfoExtractor):
     _VALID_URL = r'https?://hstream\.moe/hentai/(?P<id>[a-z0-9\-]+)'
-    _E_ID = r'e_id" type="hidden" value="([^"]*)'
 
     def _extract_cookie(self, name):
         for cookie in self._downloader.cookiejar:
@@ -19,7 +18,7 @@ class HstreamIE(InfoExtractor):
         video_id = self._match_id(url)
 
         page = self._download_webpage(url, video_id)
-        e_id = self._search_regex(self._E_ID, page, 'episode id')
+        e_id = self._search_regex(r'e_id" type="hidden" value="([^"]*)', page, 'episode id')
 
         payload = json.dumps({'episode_id': e_id})
         xsrf_token = self._extract_cookie('XSRF-TOKEN')

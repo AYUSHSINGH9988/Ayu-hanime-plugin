@@ -1,4 +1,3 @@
-import re
 import base64
 
 from yt_dlp.extractor.common import InfoExtractor, ExtractorError
@@ -6,56 +5,45 @@ from yt_dlp.utils import multipart_encode
 
 class HentaiHavenIE(InfoExtractor):
     _VALID_URL = r'https?://hentaihaven\.com/video/(?P<id>[\w\-_]+).*'
-    _VIDEO_TITLE_RE = r'chapter-heading" class="h3">([^<]+)'
-    _HH_EMBED_RE = r'[^"]+/wp-content/plugins/player-logic/player\.php[^"]+'
-    _CIPHER_MAP = dict(zip(b'NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm',
-                           b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'))
+    _CIPHER_MAP = bytes.maketrans(b'NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm',
+                                  b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
 
     def _decipher_sec_token(self, s):
         b = s.encode('ascii')
-
         for _ in range(3):
-            # Map the characters which are part of the cipher, leave the rest.
-            b = bytes(map(lambda c: self._CIPHER_MAP.get(c) or c, b))
+            b = b.translate(self._CIPHER_MAP)
             b = base64.b64decode(b)
-
         return b.decode('ascii')
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
 
-        hh_page = self._download_webpage(url, video_id)
+        page = self._download_webpage(url, video_id)
+        video_title = self._html_search_regex(r'chapter-heading" class="h3">([^<]+)', page, 'title')
+        embed_url = self._search_regex(r'([^"]+/wp-content/plugins/player-logic/player\.php[^"]+)' , page, 'embed')
 
-        video_title = self._html_search_regex(self._VIDEO_TITLE_RE, hh_page, 'title')
-        embed_url = self._search_regex(self._HH_EMBED_RE, hh_page, 'embed', group=0)
-        
-        hh_page = self._download_webpage(embed_url, video_id)
-        
-        cipher_text = self._html_search_meta('x-secure-token', hh_page).lstrip('sha512-')       
+        real_page = self._download_webpage(embed_url, video_id)
+        cipher_text = self._html_search_meta('x-secure-token', real_page).lstrip('sha512-')
         interim = self._parse_json(self._decipher_sec_token(cipher_text), video_id)
-        api_url = '{}/api.php'.format(interim['uri'])
-        payload = {
+        raw_payload, mime = multipart_encode({
             'action': 'zarat_get_data_player_ajax',
             'a': interim['en'],
             'b': interim['iv']
-        }
-        raw_payload, mime = multipart_encode(payload)
+        })
         
-        hh_res = self._download_json(api_url, video_id, headers={'Content-Type': mime},
+        result = self._download_json(f"{interim['uri']}/api.php", video_id,
+                                     headers={'Content-Type': mime},
                                      data=raw_payload)
 
-        if hh_res['status'] is False:
-            raise ExtractorError('Unable to extract JWPlayer data',
+        if not result['status']:
+            raise ExtractorError("Unable to extract JWPlayer data",
                                  video_id=video_id, ie=HentaiHavenIE.ie_key())
 
-        data = hh_res['data']
-
-        # PATCH On the website HLS manifest is in the `src' property, but yt-dlp expects the
-        # property name to be `file' instead; rest is okay.
-        for src in data['sources']:
+        # HLS manifest is expected to be present in the 'file', however in this case it's inside 'src' key.
+        for src in result['data']['sources']:
             src['file'] = src.pop('src')
 
-        result = self._parse_jwplayer_data(data, video_id, require_title=False)
+        result = self._parse_jwplayer_data(result['data'], video_id, require_title=False)
         result['title'] = video_title
 
         return result
